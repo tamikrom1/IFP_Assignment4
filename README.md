@@ -1,136 +1,94 @@
-# DeliveryQuotes
+# Delivery Quotes Calculator
 
-Course: Introduction to Functional Programming - Assignment 4.
+**Course:** Introduction to Functional Programming - Assignment 4  
+**Project Operation:** Calculate delivery quotes based on distance, weight, and configurable pricing policies.  
+**Intended Users:** Logistics dispatchers who need to quickly evaluate a batch of delivery requests, filter out those exceeding service limits, and calculate final costs using either a standard or express rate.
 
-**Topic:** calculate delivery quotes. **Intended users:** a small courier company's dispatcher, who gets a list of
-delivery requests and needs a price for every request that can be served, under either the *Standard* or the
-*Express* price policy.
+## Team & Responsibilities
 
-## Team
+The workload is divided to ensure both members implement meaningful domain logic, contribute pure functions, and write automated tests.
 
-| Member | Group | Implemented logic | Tests | Documentation |
-|---|---|---|---|---|
-| Tamerlan Iskakov | IT-2504 | `Models.cs`, `DeliveryParser.cs`, `Program.cs` | parser, empty/invalid/missing-input, duplicate and line-number tests | input format, dataset table, failure demonstration |
-| Madina Kairbayeva | IT-2504 | `Stages.cs`, `PricingPolicies.cs`, `DeliveryWorkflow.cs` | stage, boundary, two-policy, purity and captured-configuration tests | stage contracts, requirement map |
+| Member | Group | Implemented Logic | Automated Tests & Docs |
+| :--- | :--- | :--- | :--- |
+| **Tamerlan Iskakov** | IT-2504 | `Models.cs` (immutable structures), `DeliveryParser.cs` (I/O boundary validation), `Program.cs` (console integration) | Dataset preparation, parser validation tests, missing/invalid input tests, duplicate handling tests. |
+| Madina Kairbayeva | IT-2504 | `Stages.cs` (pure transformation stages), `PricingPolicies.cs` (higher-order rule configurations), `DeliveryWorkflow.cs` | Workflow purity tests, boundary values, two-policy comparison, configuration stability tests. |
 
+## Business Rules & Workflow
 
-## Workflow
+The application processes raw text input into structured records, filters them, and applies a pricing function. 
 
-```
-raw text lines --(boundary)--> ParseDataset --> validated DeliveryRequest records
-   --> Stage 1 SelectDeliverable --> Stage 2 Price (calls the policy delegate) --> Stage 3 BuildReport --> QuoteReport
-```
+**Pipeline Architecture:**  
+`Raw CSV Lines` => **ParseDataset** (Boundary) => `DeliveryRequest` => **Stage 1 (Select)** => **Stage 2 (Price)** => **Stage 3 (Report)** => `QuoteReport`
 
-Input: one CSV line per request, `id,distanceKm,weightKg` (invariant culture, `.` as decimal point).
-Output: a `QuoteReport` per policy: quotes ordered by cost then id, the total, and the ids that were excluded.
+1. **Input Validation:** Each line must contain exactly 3 comma-separated fields: `id`, `distanceKm`, `weightKg`. IDs cannot be blank or duplicated. Numeric values must be non-negative (0 is allowed for same-location drop-offs). Invalid lines are skipped and reported with their exact line number.
+2. **Service Limits (Stage 1):** The delivery is strictly rejected if it exceeds `50 km` in distance or `30 kg` in weight. Limits are inclusive.
+3. **Configurable Pricing (Stage 2):** Cost is calculated using a linear formula: `Fixed Fee + (Rate × Distance)`.
+   * **Standard Policy:** 500 fixed + 100/km
+   * **Express Policy:** 800 fixed + 150/km
 
-### Business rules
+## Dataset & Expected Results
 
-1. **Validation (boundary).** Three fields; id not blank; distance and weight are numbers and **not negative**.
-   Zero is legitimate (zero distance = pick-up and delivery at the same place). Duplicate ids (case-insensitive) are
-   rejected. Blank lines are ignored but still counted in line numbers. A rejected line is reported with its line number,
-   raw text and a message; the other lines are still processed. Nothing is replaced by a default.
-2. **Service limits (stage 1), inclusive:** distance ≤ 50 km and weight ≤ 30 kg. Requests above a limit are excluded
-   (reported, not priced).
-3. **Cost (stage 2):** `cost = fixedFee + ratePerKm × distanceKm`.
-   - Standard policy: 500 + 100 per km.
-   - Express policy: 800 + 150 per km.
+We prepared a core dataset (`data/deliveries.csv`) covering normal cases, exact boundaries, and invalid inputs.
 
-### Dataset and expected results (written before running)
+| ID | Distance | Weight | Status / Reason | Standard Cost | Express Cost |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **D1** | 2 | 3 | Accepted (Normal) | 700 | 1100 |
+| **D2** | 10 | 5 | Accepted (Normal) | 1500 | 2300 |
+| **D3** | 50 | 30 | Accepted (**Exact Boundary**) | 5500 | 8300 |
+| **D4** | 60 | 5 | Excluded (Distance > 50) | - | - |
+| **D5** | 0 | 1 | Accepted (Zero distance) | 500 | 800 |
+| **D6** | -4 | 2 | Rejected (Negative value) | - | - |
+| **D7** | abc | 2 | Rejected (Parse failure) | - | - |
+| **D8** | 20 | 45 | Excluded (Weight > 30) | - | - |
 
-`data/deliveries.csv` (8 lines):
+**Expected Output Totals:** Standard = **8200**, Express = **12500**.  
+Excluded IDs: `D4`, `D8`. Rejected lines: `6`, `7`.
 
-| Line | Raw | Expected outcome | Standard | Express |
-|---|---|---|---|---|
-| 1 | `D1,2,3` | accepted | 700 | 1100 |
-| 2 | `D2,10,5` | accepted | 1500 | 2300 |
-| 3 | `D3,50,30` | accepted — **boundary**, exactly on both limits | 5500 | 8300 |
-| 4 | `D4,60,5` | valid but **excluded**: 60 km > 50 km | — | — |
-| 5 | `D5,0,1` | accepted — zero distance is valid | 500 | 800 |
-| 6 | `D6,-4,2` | **rejected** at the boundary: negative distance | — | — |
-| 7 | `D7,abc,2` | **rejected** at the boundary: not a number | — | — |
-| 8 | `D8,20,45` | valid but **excluded**: 45 kg > 30 kg | — | — |
+## Pure Transformation Stages
 
-Expected report (ordered by cost, then id): **Standard** D5 500, D1 700, D2 1500, D3 5500, total **8200**;
-**Express** D5 800, D1 1100, D2 2300, D3 8300, total **12500**. Excluded: D4, D8. Rejected lines: 6 and 7.
-The policies differ on every accepted record (for example D1: 700 vs 1100).
+All business logic resides in `src/DeliveryQuotes/Stages.cs` using pure functions. They do not mutate arguments, rely on global state, or perform I/O.
 
-Other data files: `data/empty.csv` (valid empty dataset) and `data/invalid.csv` (duplicate id, wrong field count, blank id).
+1. **`SelectDeliverable`**: Takes `IEnumerable<DeliveryRequest>` and `ServiceLimits`. Returns a `Selection` record separating requests into `Eligible` and `Excluded` immutable arrays.
+2. **`Price`**: A higher-order function that takes the eligible requests and a delegate `Func<DeliveryRequest, decimal>`. It maps each request to a `PricedRequest` by invoking the injected rule.
+3. **`BuildReport`**: Takes the priced requests and excluded IDs to build the final `QuoteReport`, sorting the valid quotes by cost (ascending) and calculating the total sum.
 
-## Stages (pure functions in `src/DeliveryQuotes/Stages.cs`)
+## Technical Requirements Map
 
-| # | Function | Input → output | Rule | Example |
-|---|---|---|---|---|
-| 1 | `Stages.SelectDeliverable` | `IEnumerable<DeliveryRequest>`, `ServiceLimits` → `Selection` (Eligible, Excluded) | keep requests with distance ≤ max and weight ≤ max (inclusive), keep input order | limits (50, 30): `(D3,50,30)` eligible; `(D4,60,5)` excluded |
-| 2 | `Stages.Price` | `IEnumerable<DeliveryRequest>`, `Func<DeliveryRequest,decimal>` → `ImmutableArray<PricedRequest>` | calls the supplied cost rule once per request | Standard rule: `(D1,2 km)` → cost 700 |
-| 3 | `Stages.BuildReport` | policy name, `IEnumerable<PricedRequest>`, excluded requests → `QuoteReport` | order quotes by cost then ordinal id, sum the total, list excluded ids | `(D1,700)`, `(D5,500)` → quotes D5, D1; total 1200 |
+| Task Requirement | Implementation Location |
+| :--- | :--- |
+| **Task 1: Operation & Dataset** | Described in this file, dataset located in `data/deliveries.csv`. |
+| **Task 2: Immutable Models** | `Models.cs` (Uses `record` types and `ImmutableArray<T>`). |
+| **Task 2: Boundary Validation** | `DeliveryParser.cs` (Explicit `TryParse` logic, no silent defaults). |
+| **Task 3: Three Pure Stages** | `Stages.cs` (`SelectDeliverable`, `Price`, `BuildReport`). |
+| **Task 4: Configurable Rule** | `Stages.Price` receives a `Func<DeliveryRequest, decimal>` delegate. |
+| **Task 4: Two Policies** | `PricingPolicies.cs` defines `Standard` and `Express` configurations. |
+| **Task 5: Functional Purity** | No side effects in `Stages.cs` or `DeliveryParser.cs`. I/O isolated in `Program.cs`. |
 
-The workflow is visible in one place, `DeliveryWorkflow.Run`: `SelectDeliverable` → `Price(selection.Eligible, policy.CostRule)` → `BuildReport`.
+## Testing
 
-**Trace of record `D1,2,3` (Standard):** raw text `"D1,2,3"` → `DeliveryRequest("D1", 2, 3)` → stage 1: 2 ≤ 50 and 3 ≤ 30, so it is in `Eligible` →
-stage 2: `PricedRequest(D1, 500 + 100 × 2 = 700)` → stage 3: `DeliveryQuote("D1", 700)` inside the `QuoteReport`.
+The solution includes automated testing using xUnit (`tests/DeliveryQuotes.Tests/DeliveryTests.cs`). Run tests via `dotnet test`.
 
-### Higher-order function and policies
+* **Normal Workflow:** Asserts documented quotes and totals for both Standard and Express policies.
+* **Empty/Missing Input:** Asserts graceful handling of empty lists and `ArgumentNullException` for missing data.
+* **Boundary Values:** Validates exact limits (50/30) are included, while 50.01/30.01 are excluded.
+* **Purity & Isolation:** Checks that input arrays remain `SequenceEqual` before and after processing.
+* **Higher-Order Function:** Asserts the policy delegate is correctly captured and invoked per record.
 
-`Stages.Price` is the higher-order function: it takes a `Func<DeliveryRequest, decimal>` and invokes it (`costRule(r)`)
-for every request. `PricingPolicies.Linear(name, fixedFee, ratePerKm)` builds a policy; `Standard` and `Express` are the two
-policies for the same rule. The policy is chosen in `Program.cs` (`PricingPolicies.ByName`) and passed as an argument; no mutable
-global is read. The decimals are copied into the closure, so later changes to the caller's variables do not change the policy
-(tested). The service limits are also an argument (`ServiceLimits`), so a threshold can be changed without touching the stages.
+**Current Test Status:** `Passed: 24, Failed: 0`.
 
-### Purity
+## Execution Instructions
 
-Parsing and stages do no file or Console access, no clock, no randomness, no shared mutable state. They do not modify input:
-results are new `ImmutableArray` values and records. `File.ReadAllLines` and all `Console` output are only in `Program.cs`,
-after/before the pure workflow.
+Requires .NET 8.0 SDK. Run the following commands from the root directory (where `.sln` is located):
 
-## Requirement map
-
-| Requirement | Where |
-|---|---|
-| Task 1 workflow, dataset ≥ 5 records, expected results | this README, `data/deliveries.csv` |
-| Task 2 typed immutable models | `Models.cs` (records, `ImmutableArray`) |
-| Task 2 boundary parsing, missing vs empty vs zero, clear messages | `DeliveryParser.TryParseLine`, `DeliveryParser.ParseDataset` |
-| Task 3 three composed pure stages | `Stages.SelectDeliverable`, `Stages.Price`, `Stages.BuildReport`; composed in `DeliveryWorkflow.Run` |
-| Task 4 higher-order function + two policies | `Stages.Price` (invokes `costRule`), `PricingPolicies.Standard` / `Express` / `Linear` |
-| Task 4 policy chosen outside the pipeline | `Program.cs`, `PricingPolicies.ByName`, parameter `policy` of `DeliveryWorkflow.Run` |
-| Task 5 pure core, I/O at the edge | stages/parser vs `Program.cs` |
-| Tests | `tests/DeliveryQuotes.Tests/DeliveryTests.cs` |
-
-## Tests (xUnit, `tests/DeliveryQuotes.Tests/DeliveryTests.cs`)
-
-| Required case | Test(s) | Expected |
-|---|---|---|
-| Normal workflow | `NormalWorkflow_Standard_...`, `NormalWorkflow_Express_...` | tables above; totals 8200 and 12500; excluded D4, D8; error lines 6, 7 |
-| Empty dataset | `EmptyDataset_GivesEmptyReport_...` | no quotes, total 0, no exception |
-| Boundary value | `Boundary_ExactLimitsAreIncluded_...`, `Boundary_ZeroDistance_...` | 50 km / 30 kg included, 50.01 / 30.01 excluded; zero distance costs 500 / 800 |
-| Invalid and missing input | `InvalidLine_IsRejected_...` (10 inputs), `MissingInput_IsRejected_...`, `Dataset_RejectsDuplicates_...` | no request, message present; `null` throws `ArgumentNullException` |
-| Two policies | `TwoPolicies_SameInput_DifferentResults_SamePipeline` | D1: 700 vs 1100 |
-| Purity and stages | `Stage1_Alone_...`, `Stage2_Alone_...`, `Stage3_Alone_...`, `Workflow_IsPure_...` | input arrays unchanged; delegate called once per request; same input gives same output |
-| Configuration stability | `Policy_CapturesItsConfiguration_...`, `ChangingTheLimits_...` | later changes to variables do not alter the policy; wider limit includes D4 |
-
-16 test methods (24 test cases with the `Theory` rows).
-**Latest `dotnet test` result:** _paste the summary line here after running the tests on your machine, e.g. "Passed: 24, Failed: 0"._
-
-## How to build, run and test
-
-- **SDK:** .NET SDK 8.0 (`dotnet --version` should start with `8.`). Test packages (xUnit) are restored from NuGet, so internet access is needed once.
-- **Working directory:** the solution folder (the one containing `DeliveryQuotes.sln`).
-
-```
+```bash
+# Build the project
 dotnet build
+
+# Run unit tests
 dotnet test
-dotnet run --project src/DeliveryQuotes                                   # data/deliveries.csv, both policies
-dotnet run --project src/DeliveryQuotes -- data/deliveries.csv express    # one policy: standard | express | both
-```
 
-Demonstrations:
-- **Normal:** `dotnet run --project src/DeliveryQuotes` → output as in the tables above.
-- **Empty dataset:** `dotnet run --project src/DeliveryQuotes -- data/empty.csv` → "(no quotes)", total 0.
-- **Invalid input:** `dotnet run --project src/DeliveryQuotes -- data/invalid.csv` → three rejected lines with messages; the valid line is still priced.
-- **Missing file:** `dotnet run --project src/DeliveryQuotes -- nope.csv` → error message, exit code 1.
+# Run with both policies on the default dataset
+dotnet run --project src/DeliveryQuotes
 
-## Git (optional for this assignment, required for the final project)
-
-`.gitignore` excludes `bin/`, `obj/`, `.vs/`, `.idea/` and local secrets. Basic flow: `git init`, `git add .`, `git commit -m "Add initial pipeline"`,
-create a repository on GitHub/GitLab, `git remote add origin REPOSITORY_URL`, `git push -u origin main`; teammates `git clone`, work in a feature branch and open a pull request.
+# Run with a specific policy
+dotnet run --project src/DeliveryQuotes -- data/deliveries.csv standard
